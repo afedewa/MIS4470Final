@@ -1,0 +1,471 @@
+---
+title: "Sale Price Predictions"
+author: "Amy Fedewa"
+date: "April 24, 2019"
+output:
+  html_document: default
+  word_document: default
+---
+
+
+
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(MLmetrics)
+library(readr)
+library(tidyr)
+library(caret)
+library(corrplot)
+
+
+```
+
+
+## Introduction
+
+
+For this project I really wanted to focus on using R for statistical analysis of some kind because I think I will be using it a lot n my future career as an actuary.
+
+
+Originally  for this project,I had entered a Kaggle competition that provides a large data set on movies and their profits earned. I would use this data to come up with the best box office prediction formulas I can using R.  
+
+I ended up switching to a different Kaggle competition.  The data for the original competition would mostly be more difficult to process, because it consisted of categories like title, or 'crew' and other longs strings.  I wasn't really interested in processing these strings of information, and I felt it would be more difficult to showcase what I leaned in this course, so I switched to a different Kaggle competition with a more 'friendly' data set.  This competition was to predict home prices.   Note that a lot of the data cleaning portion was done in class on the very last day.   I don't want to take credit for those portions.  
+
+First, I'll load the train and test sets into R:
+
+```{r}
+House_Train <- read.table("train.csv", header=TRUE, sep= ",", stringsAsFactors=FALSE)
+House_Test<- read.table ("test.csv", header=TRUE, sep= ",", stringsAsFactors=FALSE)
+head(House_Train)
+head(House_Test)
+
+
+```
+
+
+
+Note that the train data contains an extra column for sale price, which we will predict for the test set.
+
+I will use many of R's libraries, all of which I will load above.
+
+
+## Data visulization
+
+This data is nice because it contains a combination of types.    Many are categorical, but some are years, such as year sold and year built.   Things like square footage are numeric, so there's many thing we can visualize here.  
+
+A description of each data type is included in an attached text file.
+
+The summary function can quickly provide an overview of all data.   One must be careful to remember that some of the variables like MSSubClass are categorical, so the summaries given here are meaningless.   However, its easy to see stats of the truly numeric variables.  For example, we see that the houses in this data set were built between 1872 and 2010 with a mean year of 1971 and median of 1973.   
+
+```{r}
+summary(House_Train)
+```
+
+There are many different types of plots in R.   Here are just a few. looking at the square feet on the first floor:
+```{r}
+ggplot(data=House_Train) + geom_histogram(mapping=aes(x=X1stFlrSF))
+ggplot(data=House_Train) + geom_boxplot(aes(x="First Floor Square Feet", y= X1stFlrSF))
+ggplot(data=House_Train) + geom_violin(aes(x="First Floor Square Feet", y= X1stFlrSF))
+ggplot(data=House_Train) + geom_density(aes(x=X1stFlrSF))
+```
+
+
+These 4 plots all show that the data for the first floor square feet is right skewed with several outliers.   The upper points on the box plot show these outliers, while the other plots just show the shape of the distribution.   
+
+
+R makes it easy to filter the data here.   Lets say we wanted to repeat the histogram here, but without some of the outliers.   I'll just use houses with 2500 square feet on the first floor or  less:
+
+```{r}
+FirstFloorSqrFeetLessOutliers<- subset(House_Train, X1stFlrSF<=2000)
+ggplot(data=FirstFloorSqrFeetLessOutliers) + geom_histogram(bins = 7, color= "blue", fill="blue", mapping=aes(x=X1stFlrSF))+  labs(title ="Distribution of first floor square feet, excluding some outliers", x= "First florr square feet", y="Number of homes")
+```
+Here, I arbitrarily choose 7 bins.   However, there are statistical methods to determine the best number of bins.   Here I use the Freedman-Diaconis method
+
+
+```{r}
+numbins_FD <- function(data_col){ceiling((max(data_col)- min(data_col))/(2*IQR(data_col, na.rm = FALSE, type = 7))/(length(data_col))^(1/3))
+  
+}
+
+numbins_FD(FirstFloorSqrFeetLessOutliers$X1stFlrSF)
+```
+Oh no!   this returns the value of only 1  bin.   That's not very helpful.   This is happening because this data is not normally distributed and is instead skewed right. If I wanted a way to estimate the number of bins needed, I would need to look into a different method.   
+
+
+
+
+
+
+It's easy to create side-by-side box plots:
+
+```{r}
+ggplot(data=House_Train) + geom_boxplot(aes(x=House_Train$CentralAir, y= House_Train$SalePrice))+  labs(title ="Sale price versus cetral air", x= "central air", y="sale price")
+```
+
+Here we see that houses with central air seem to sell for significantly more than those without.
+
+```{r}
+
+
+House_Train$MSSubClass= as.factor(House_Train$MSSubClass)
+
+ggplot(data=House_Train) + geom_boxplot(aes(x=House_Train$MSSubClass, y= House_Train$SalePrice))+  labs(title ="Sale price versus MS Sub Class", x= "MS subClass", y="sale price")
+
+```
+
+Here, I had to convert MS SubClass to a factor before proceeding.  We can see the subclass of 60 (2 story and new) has a higher selling price than say, class 45 (1.5 stories and unfinished4), which makes perfect sense.
+
+
+
+
+```{r}
+
+```
+
+
+```{r}
+House_Train$OverallQual= as.factor(House_Train$OverallQual)
+House_Train$OverallCond= as.factor(House_Train$OverallCond)
+
+ggplot(data=House_Train) + geom_boxplot(aes(x=House_Train$OverallQual, y= House_Train$SalePrice))+  labs(title ="Sale price versus Overall Quality", x= "Overall Quality", y="sale price")
+```
+
+
+Here we see that as overall quality of the house increases, so does sale price.  Interestingly, we can also see that the variation in sale prices also increases as sales price goes up.   
+
+```{r}
+ggplot(House_Train) + geom_point(aes(x=House_Train$YearBuilt, y=House_Train$SalePrice, color=House_Train$LandSlope, size= House_Train$LotArea)) + labs(title =" Sale Price versus year built with land slope and lot area", x= "Year Built", y="Sale Price") 
+```
+
+Interestingly, the relationship between year built and sale price looks rather weak.  
+We can also see that lots with A more severe slope tend to also have larger points and larger lot areas
+
+
+There are many different ways we could visualize this data.   I'll use more if needed, but I'll move on for now.     
+
+## dtata manipulation
+
+Now I'll look at ways to manipulate my data to make it easier to process.   I'm going to leave my original data frame alone and do this work in a new data frame House_Train2   Am significant amount of data cleaning will need to be done here.  
+
+```{r}
+House_Train %>%
+  summarise_all(funs(sum(is.na(.)))) %>% 
+  gather(key = 'variable', value = 'num_na') %>% 
+  filter(num_na > 0) %>% 
+  arrange(desc(num_na))
+```
+  
+  
+  We need to deal with missing values first.
+  
+```{r}
+House_Train$PoolQC <- replace_na(House_Train$PoolQC, 'no_pool')
+House_Train$Alley <- replace_na(House_Train$Alley, 'no_alley')
+House_Train$Fence <- replace_na(House_Train$Fence, 'no_fence')
+House_Train$FireplaceQu <- replace_na(House_Train$FireplaceQu, 'no_fireplace')
+House_Train <- House_Train %>% 
+  mutate_at(vars(starts_with('Garage')), replace_na, 'no_garage')
+
+House_Train$GarageArea <- as.numeric(House_Train$GarageArea)
+
+House_Train<- House_Train %>% 
+  mutate_at(vars(GarageArea), replace_na, 0)
+
+House_Train <- House_Train %>% 
+  mutate_at(vars(starts_with('Bsmt')), replace_na, 'no_basement')
+House_Train<- House_Train %>% 
+  mutate_at(vars(LotFrontage), replace_na, 0)
+
+```
+  
+```{r}
+House_Train <- House_Train %>% 
+  mutate_at(vars(starts_with('MiscF')), replace_na, 'no_feature')
+
+House_Train <- House_Train %>% 
+  mutate_at(vars(MasVnrType), replace_na, 'None')
+
+House_Train<- House_Train %>% 
+  mutate_at(vars(MasVnrArea), replace_na, 0)
+
+House_Train<- House_Train %>% 
+  mutate_at(vars(Electrical), replace_na, 'None')
+```
+```{r}
+House_Train <- House_Train[, 2:ncol(House_Train)]
+```
+```{r}
+House_Train%>%
+  summarise_all(funs(sum(is.na(.)))) %>% 
+  gather(key = 'variable', value = 'num_na') %>% 
+  filter(num_na > 0) %>% 
+  arrange(desc(num_na))
+```
+
+  
+## Model assumptions
+
+For this data I will develop a linear model.  We also talked about logistic models in this course, but that would be used where the response variable is binary, which sale price is not.
+
+
+To find the best model, we want the smallest least squared error as possible.  
+It is important to understand this concept when developing a linear model.   
+
+When we pick a regression line, each data point will have a value predicted by the line. Often, this value is called y-hat.   The distance between this predicted value and the actual data point is called an error or residual.   
+
+Residuals can be positive or negative.  Therefore, we can't simply add them together to get an idea of how much error there is overall.   Therefore we square these error terms first and then add them together.   This gives us the least squared error or residual squared error.  Better predictive models will have smaller distances between Y and Y-hat, and therefore, smaller residual squared error.
+
+
+Linear regression involves several important assumptions.   
+
+1.  The errors are normally distributed
+ This means that overall, the errors sum to zero.  
+ 
+2. Constant variance of the error terms
+This term is also referred to as heteroskedasticity.  As the Y values get larger, we expect the variance of those values to stay the same.  If this is not the case, a plot of y-hat versus the residual will show a distinct fan-out pattern.  While heteroskedasticity does lead to wider confidence intervals for the data, it does not lead to biased estimates
+
+3.   No multicollinearity
+In other words, the x variables used in the model should be independent of each other
+
+
+```{r}
+rmse <- function(y, yhat) sqrt(mean((y - yhat)^2))
+```
+
+
+Here is another important function:
+```{r}
+
+Zval<-function(x) (x-mean(x))/sd(x)
+ggplot(data=House_Train) + geom_histogram(mapping=aes(x=SalePrice))
+
+
+##House_Train<-House_Train %>%mutate(Zprice=Zval(SalePrice))
+##House_Train%>% filter(Zprice>3) %>% select(Zprice)%>%arrange(desc(Zprice))
+
+```
+By standardizing the numerical variables, we can identify and potentially eliminate outliers.  However, this data is skewed to the right.  We don't want to simply eliminate more extreme values in this case
+
+```{r}
+
+numeric_vars <- which(sapply(House_Train, is.numeric))
+numeric_vars
+corrplot(cor(House_Train[, numeric_vars], use="pairwise.complete.obs"))
+```
+This plot is very difficult to read.   Note that as expected, we have one to one correlations down the middle since variables will obviously correlate 100% with themselves.   
+
+
+Variables that correlate with sale price are the ones we will want to use in the final model.  
+
+
+```{r}
+
+cor_matrix<-cor(House_Train[, numeric_vars], use="pairwise.complete.obs")
+highcor_thresh <- 0.5
+cor_saleprice <- cor_matrix[, 'SalePrice']
+cor_saleprice[cor_saleprice > highcor_thresh]
+highcor_vars <- names(cor_saleprice[cor_saleprice > highcor_thresh])
+corrplot.mixed(cor(House_Train[, highcor_vars], use="pairwise.complete.obs"),
+               tl.pos = "lt")
+```
+We can see which variables correlate with price here.   BUT one of the assumptions of linear regression is that the x variables will be independent.   If we were to use all of the variables here, this would not be the case.
+
+```{r}
+ggplot(House_Train) + geom_point(aes(x = `X1stFlrSF` + `X2ndFlrSF` + TotalBsmtSF, y = GrLivArea))
+
+```
+
+This is where I begin to deviate slightly from the data cleaning done in class.   
+
+I will add total SF together and drop the other variables 
+```{r}
+House_Train<-House_Train %>%mutate(TotalSF=X1stFlrSF+X2ndFlrSF+TotalBsmtSF+ GarageArea)
+House_Train <- House_Train %>% 
+  select(-c(`X1stFlrSF`, `X2ndFlrSF`, LowQualFinSF, TotalBsmtSF, GrLivArea, GarageArea))
+```
+
+```{r}
+
+numeric_vars <- which(sapply(House_Train, is.numeric))
+numeric_vars
+corrplot(cor(House_Train[, numeric_vars], use="pairwise.complete.obs"))
+cor_matrix<-cor(House_Train[, numeric_vars], use="pairwise.complete.obs")
+highcor_thresh <- 0.5
+cor_saleprice <- cor_matrix[, 'SalePrice']
+cor_saleprice[cor_saleprice > highcor_thresh]
+highcor_vars <- names(cor_saleprice[cor_saleprice > highcor_thresh])
+corrplot.mixed(cor(House_Train[, highcor_vars], use="pairwise.complete.obs"),
+               tl.pos = "lt")
+```
+
+Theoretically you would want to repeat this for negative correlations:
+
+```{r}
+umeric_vars <- which(sapply(House_Train, is.numeric))
+numeric_vars
+corrplot(cor(House_Train[, numeric_vars], use="pairwise.complete.obs"))
+cor_matrix<-cor(House_Train[, numeric_vars], use="pairwise.complete.obs")
+lowcor_thresh <- -0.5
+cor_saleprice <- cor_matrix[, 'SalePrice']
+cor_saleprice[cor_saleprice < lowcor_thresh]
+lowcor_vars <- names(cor_saleprice[cor_saleprice < lowcor_thresh])
+
+```
+
+as you can see, we don't have any in that range.
+
+
+
+Another way to assess multicollinearity is through the variance inflation factor or VIF
+
+A VIF of over 5 suggests multicolinearity and perhaps that variable should be removed from the model.  
+
+VIF= 1/(1-r^2) where R2  is the squared value of the correlation coefficients given in the correlation plot.  In other words, a R value of greater than 0.55 (or less than -.55) suggests possible multicollinearity.
+
+The variables above this mark include year remolded and year built, total square feet and total bath and total square feet and total rooms above ground.
+
+```{r}
+House_Train <- House_Train %>% 
+  select(-c(`FullBath`, TotRmsAbvGrd, YearRemodAdd))
+```
+
+
+```{r}
+numeric_vars <- which(sapply(House_Train, is.numeric))
+numeric_vars
+corrplot(cor(House_Train[, numeric_vars], use="pairwise.complete.obs"))
+cor_matrix<-cor(House_Train[, numeric_vars], use="pairwise.complete.obs")
+highcor_thresh <- 0.5
+cor_saleprice <- cor_matrix[, 'SalePrice']
+cor_saleprice[cor_saleprice > highcor_thresh]
+highcor_vars <- names(cor_saleprice[cor_saleprice > highcor_thresh])
+corrplot.mixed(cor(House_Train[, highcor_vars], use="pairwise.complete.obs"),
+               tl.pos = "lt")
+```
+
+
+
+
+## Model Partitioning
+
+I need to have a train and test set that I can use.  I don't have sale price for the data set provided by Kaggle, so I need to partition the train set.
+
+```{r}
+set.seed(47)
+trainIndex <- caret::createDataPartition(House_Train$SalePrice, p = 0.8,
+                                  list = FALSE,
+                                  times = 1)
+
+MYtrain <- House_Train[trainIndex, 1:ncol(House_Train)]
+MYtest <- House_Train[-trainIndex, 1:ncol(House_Train)]
+```
+
+
+Now I've made a very small model with just the numeric variables, which I've modified to get rid of multicollinearity issues
+```{r}
+SmallModel <- lm(SalePrice ~YearBuilt+TotalSF, data=MYtrain)
+summary(SmallModel)
+```
+
+
+Our R squared value here is already 0.6996 suggesting that these 2 variables alone can explain about 70% of the variation in house price.
+
+
+Here we create the Y- hat values for the test data.
+
+```{r}
+predsmall <- predict(SmallModel, newdata = MYtest)
+```
+
+
+Next we test it on the training data
+```{r}
+
+
+maeSmallModelfit <- MAE(y_pred = fitted.values(SmallModel), y_true = MYtrain$SalePrice)
+
+```
+
+
+and finally run it on the test data to see how it does.
+```{r}
+maeSmallModel <- MAE(y_pred = predsmall, y_true = MYtest$SalePrice)
+maeSmallModel
+```
+
+
+That's interesting.  My test data has a lower error than the training data.   
+
+If the training data led to a small amount of error, while the test data had high MAE, that would intake over fitting.   
+
+I've obviously taken care of that.  Perhaps now I have under fitting.  The better models created in class had a lower MAE value of 18826, but also had a significantly larger amount of data prep.   
+
+
+```{r}
+x <- nearZeroVar(House_Train, saveMetrics = TRUE)
+x[x[,"zeroVar"] > 0, ]
+```
+We see hear that none of our variables contain a variance near zero.   So they don't need to be removed from the model for that reason
+
+
+```{r}
+BigModel <- lm(SalePrice ~ ., data = House_Train)
+summary(BigModel)
+```
+
+Let's test a few more models.  Here's a massive model with all 75 variables now in our training set.   That's a lot of variables!   With all of the binary variables thrown in, this is a crazy model.
+
+```{r}
+predBig <- predict(BigModel, newdata = MYtest)
+maeBiglModelfit <- MAE(y_pred = fitted.values(BigModel), y_true = MYtrain$SalePrice)
+maeBiglModelfit
+maeBigModel <- MAE(y_pred = predBig, y_true = MYtest$SalePrice)
+maeBigModel
+
+```
+
+Here we see that simply throwing all of our variables into a model doesn't increase its predictive value.
+
+```{r}
+House_Train$OverallQual= as.numeric(House_Train$OverallQual)
+
+model3 <- lm(SalePrice ~YearBuilt+TotalSF+OverallQual, data=MYtrain)
+summary(model3)
+pred3<- predict(model3, newdata = MYtest)
+mae3Modelfit <- MAE(y_pred = fitted.values(model3), y_true = MYtrain$SalePrice)
+mae3Modelfit
+mae3Model <- MAE(y_pred = pred3, y_true = MYtest$SalePrice)
+mae3Model
+
+
+```
+This has lowered the MAE.   It looks like we eliminated more variables than we would have.
+
+```{r}
+House_Train$OverallCond= as.numeric(House_Train$OverallQual)
+
+model4 <- lm(SalePrice ~TotalSF+OverallQual+Neighborhood+KitchenQual, data=MYtrain)
+summary(model4)
+pred4<- predict(model4, newdata = MYtest)
+mae4Modelfit <- MAE(y_pred = fitted.values(model4), y_true = MYtrain$SalePrice)
+mae4Modelfit
+mae4Model <- MAE(y_pred = pred4, y_true = MYtest$SalePrice)
+mae4Model
+```
+My error values are decreasing.  The stars next to each category show which variables are significant.
+
+##GitHub Link
+https://github.com/afedewa/MIS4470Final.git
+
+## Conclusions
+I hope I was able to showcase some of the methods we learned in this course while applying them to a new situation.   This model is not ready to compete in the kaggle competition, where the current front runner has a logarithmic least squared error of only ~0.10, but I now know I can enter these competitions as a way to continue to build my knowledge of R and python.
+
+
+
